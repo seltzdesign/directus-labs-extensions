@@ -131,7 +131,7 @@ function usePreventClickAfterDragging({ mouseDownHandler, clickHandler }) {
 					name="expand_more"
 					class="collapse-btn"
 					:class="{ 'children-collapsed': childrenCollapsed }"
-					@click.stop="$emit('toggle-children')"
+					@click.stop="$emit('toggle-children', $event.shiftKey)"
 				/>
 			</div>
 		</td>
@@ -262,7 +262,9 @@ function usePreventClickAfterDragging({ mouseDownHandler, clickHandler }) {
 
 		&.children-collapsed {
 			--v-icon-color: var(--theme--foreground);
-			transform: rotate(90deg);
+			/* expand_more points down; collapsed must point RIGHT (the universal "expand me"),
+			   so rotate -90deg (CCW). +90 would point it left, which reads backwards. */
+			transform: rotate(-90deg);
 		}
 	}
 
