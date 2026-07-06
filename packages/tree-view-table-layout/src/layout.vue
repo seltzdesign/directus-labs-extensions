@@ -154,6 +154,98 @@ watch(editActiveWritable, (open) => {
 
 onBeforeUnmount(() => document.removeEventListener('click', onBackdropClick, true));
 
+// Remember which collapsible form sections (Directus "detail groups") the user had open, per
+// collection. The core detail-group resets to its `start` default on every mount, so editing item
+// after item always re-opened the same section. We persist the open set in localStorage and re-apply
+// it whenever the drawer (re)opens, so the section layout carries across items. Default = all closed
+// (the schema `start` is also set to closed, so there's no open-then-close flash). Purely a per-user
+// view preference — never touches the item data.
+const sectionsKey = () => `tvtl:openSections:${collection.value}`;
+
+function drawerSections() {
+	const drawer = document.querySelector('.v-drawer');
+	if (!drawer)
+		return [] as { header: HTMLElement; label: string; open: boolean }[];
+	return [...drawer.querySelectorAll('.v-detail.group-detail')]
+		.map((el) => {
+			const header = el.querySelector('.v-divider') as HTMLElement | null;
+			return { header, label: header?.textContent?.trim() ?? '', open: !!header?.classList.contains('active') };
+		})
+		.filter((s): s is { header: HTMLElement; label: string; open: boolean } => !!s.header && !!s.label);
+}
+
+function readSavedSections(): Set<string> {
+	try {
+		return new Set(JSON.parse(localStorage.getItem(sectionsKey()) || '[]'));
+	}
+	catch {
+		return new Set();
+	}
+}
+
+function saveOpenSections() {
+	const open = drawerSections().filter((s) => s.open).map((s) => s.label);
+	try {
+		localStorage.setItem(sectionsKey(), JSON.stringify(open));
+	}
+	catch { /* storage unavailable — best-effort preference only */ }
+}
+
+let sectionRaf = 0;
+let sectionClickHandler: ((e: MouseEvent) => void) | null = null;
+let applyingSections = false; // true while WE toggle, so our own clicks aren't mistaken for the user's
+let userTookOver = false; // once the user toggles a section, stop re-applying and respect their choice
+
+// Toggle each section to match the saved set.
+function applySavedSections(saved: Set<string>) {
+	applyingSections = true;
+	for (const s of drawerSections()) {
+		if (s.open !== saved.has(s.label))
+			s.header.click();
+	}
+	applyingSections = false;
+}
+
+// Restore on open. The form loads async and can re-render the sections back to their `start`
+// default AFTER a one-shot restore (the timing varies), so we re-apply the saved state every frame
+// until the user takes over (or a ~3s safety cap). Saving is driven purely by real header CLICKS —
+// the form's own programmatic resets never click, so they can't corrupt the saved preference.
+function startSectionMemory() {
+	const saved = readSavedSections();
+	userTookOver = false;
+	let frames = 0;
+	const step = () => {
+		if (!userTookOver && drawerSections().length)
+			applySavedSections(saved);
+		if (!userTookOver && frames++ < 180)
+			sectionRaf = requestAnimationFrame(step);
+	};
+	sectionRaf = requestAnimationFrame(step);
+
+	sectionClickHandler = (e: MouseEvent) => {
+		if (applyingSections)
+			return; // our own restore click, not the user's
+		const target = e.target as HTMLElement | null;
+		if (target?.closest?.('.v-divider') && target.closest('.v-drawer')) {
+			userTookOver = true; // hand control to the user for the rest of this open
+			requestAnimationFrame(saveOpenSections); // let the toggled class settle first
+		}
+	};
+	document.addEventListener('click', sectionClickHandler, true);
+}
+
+function stopSectionMemory() {
+	cancelAnimationFrame(sectionRaf);
+	if (sectionClickHandler)
+		document.removeEventListener('click', sectionClickHandler, true);
+	sectionClickHandler = null;
+	applyingSections = false;
+	userTookOver = false;
+}
+
+watch(editActiveWritable, (open) => (open ? startSectionMemory() : stopSectionMemory()));
+onBeforeUnmount(stopSectionMemory);
+
 const mainElement = inject<Ref<Element | undefined>>('main-element');
 
 const table = ref<ComponentPublicInstance>();
