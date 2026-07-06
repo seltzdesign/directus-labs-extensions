@@ -13,6 +13,7 @@ import type { Collection } from './core-clones/types/collections';
 import { useSync } from '@directus/extensions-sdk';
 import {
 	inject,
+	onBeforeUnmount,
 	ref,
 	toRefs,
 	watch,
@@ -131,6 +132,27 @@ function onDrawerSave(edits: Record<string, any>) {
 		return;
 	props.saveEdits({ [props.editPrimaryKey]: edits });
 }
+
+// The core drawer-item forces the drawer `persistent` (Directus hardcodes it to avoid accidental
+// data loss), so clicking the dimmed backdrop does nothing. Users expect an outside-click to dismiss
+// like ESC. While the drawer is open, close it on a backdrop-scrim click. We match the scrim
+// precisely — the `.v-overlay` that sits beside our `.v-drawer` panel — so clicks inside the form,
+// on its dropdown portals, or on the error dialog never trigger a close. Setting active=false is the
+// same immediate discard-and-close ESC does (we don't set preventCancelWithEdits).
+function onBackdropClick(event: MouseEvent) {
+	const overlay = (event.target as HTMLElement | null)?.closest?.('.v-overlay');
+	if (overlay && overlay.parentElement?.querySelector(':scope > .v-drawer'))
+		editActiveWritable.value = false;
+}
+
+watch(editActiveWritable, (open) => {
+	if (open)
+		document.addEventListener('click', onBackdropClick, true);
+	else
+		document.removeEventListener('click', onBackdropClick, true);
+});
+
+onBeforeUnmount(() => document.removeEventListener('click', onBackdropClick, true));
 
 const mainElement = inject<Ref<Element | undefined>>('main-element');
 
