@@ -47,6 +47,7 @@ const emit = defineEmits([
 	'update:tableHeaders',
 	'update:limit',
 	'update:fields',
+	'update:editActive',
 ]);
 
 interface Props {
@@ -81,6 +82,8 @@ interface Props {
 	parentField: string | null;
 	saveEdits: (edits: Record<PrimaryKey, Item>) => void;
 	isFiltered: boolean;
+	editActive: boolean;
+	editPrimaryKey: PrimaryKey | null;
 }
 
 const { t } = useI18n();
@@ -115,6 +118,19 @@ function useCollectionPermissions(collection: Ref<string>) {
 const selectionWritable = useSync(props, 'selection', emit);
 const tableHeadersWritable = useSync(props, 'tableHeaders', emit);
 const limitWritable = useSync(props, 'limit', emit);
+const editActiveWritable = useSync(props, 'editActive', emit);
+
+// drawer-item validates + emits its changed-fields delta on save (it does NOT persist), then
+// closes itself. Route that delta through saveEdits, which PATCHes the changed fields and
+// refreshes the row in place. Cancel/esc emit no `input`, so nothing is written on cancel.
+// (A rare server-side rejection surfaces Directus' standard error dialog, same as its native
+// full-page editor — we deliberately don't try to re-stage, since the drawer self-closes and
+// the layout-slot two-way binding can't reliably re-open it.)
+function onDrawerSave(edits: Record<string, any>) {
+	if (props.editPrimaryKey == null)
+		return;
+	props.saveEdits({ [props.editPrimaryKey]: edits });
+}
 
 const mainElement = inject<Ref<Element | undefined>>('main-element');
 
@@ -365,6 +381,16 @@ function removeField(fieldKey: string) {
 			name="no-results"
 		/>
 		<slot v-else-if="itemCount === 0" name="no-items" />
+
+		<!-- Edit-in-drawer: Directus' globally-registered drawer-item renders the full item
+		     form in a slide-in drawer. active is driven by a row click (see index.ts onRowClick);
+		     on save it emits its delta to onDrawerSave. No v-if — v-model:active gates loading. -->
+		<drawer-item
+			v-model:active="editActiveWritable"
+			:collection="collection"
+			:primary-key="editPrimaryKey ?? '+'"
+			@input="onDrawerSave"
+		/>
 	</div>
 </template>
 

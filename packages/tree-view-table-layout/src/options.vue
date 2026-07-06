@@ -15,6 +15,7 @@ interface Props {
 	collection: string;
 	fieldsInCollection: any;
 	tableSort: { by: string; desc: boolean } | null;
+	editInDrawer: boolean;
 }
 
 const props = defineProps<Props>();
@@ -24,12 +25,14 @@ const emit = defineEmits([
 	'update:parentField',
 	'update:activeFields',
 	'update:fields',
+	'update:editInDrawer',
 ]);
 
 const { t } = useI18n();
 
 const tableSpacingWritable = useSync(props, 'tableSpacing', emit);
 const parentFieldWritable = useSync(props, 'parentField', emit);
+const editInDrawerWritable = useSync(props, 'editInDrawer', emit);
 
 const selfReferencingM2oFields = computed(() => {
 	return props.fieldsInCollection?.filter(
@@ -117,6 +120,17 @@ const selfReferencingM2oFields = computed(() => {
 					value: 'comfortable',
 				},
 			]"
+		/>
+	</div>
+
+	<div class="field">
+		<div class="type-label">
+			Editing
+		</div>
+		<v-checkbox
+			v-model="editInDrawerWritable"
+			block
+			label="Open a clicked row in a side drawer (keeps your scroll position) instead of the full-page editor"
 		/>
 	</div>
 </template>

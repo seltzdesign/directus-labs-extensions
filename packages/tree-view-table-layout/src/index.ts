@@ -59,6 +59,13 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 		const layoutOptions = useSync(props, 'layoutOptions', emit);
 		const layoutQuery = useSync(props, 'layoutQuery', emit);
 
+		// Edit-in-drawer: open the clicked row in a slide-in drawer (Directus' core drawer-item,
+		// globally registered) instead of navigating to the full-page item route. The list stays
+		// mounted behind the drawer, so scroll position is preserved. Toggleable, default on.
+		const editInDrawer = syncRefProperty(layoutOptions, 'editInDrawer', true);
+		const editActive = ref(false);
+		const editPrimaryKey = ref<PrimaryKey | null>(null);
+
 		const { collection, filter, filterSystem, filterUser, search } =
             toRefs(props);
 
@@ -89,7 +96,7 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			sortField,
 		});
 
-		const { onClick } = useLayoutClickHandler({
+		const { onClick: onClickDefault } = useLayoutClickHandler({
 			props,
 			selection,
 			primaryKeyField,
@@ -151,7 +158,10 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			error,
 			totalPages,
 			tableSort,
-			onRowClick: onClick,
+			onRowClick,
+			editActive,
+			editPrimaryKey,
+			editInDrawer,
 			onSortChange,
 			onAlignChange,
 			tableRowHeight,
@@ -209,6 +219,29 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 				return;
 			const pk = primaryKeyField.value;
 			selection.value = items.value.map((item) => item[pk.field]);
+		}
+
+		// Row-click handler. When edit-in-drawer is on, open the clicked row in the drawer;
+		// otherwise fall back to the default navigate/select behaviour. We defer to the default
+		// for every case that isn't a plain edit-click — a modifier-click (open in new tab),
+		// readonly, selection mode, or an active multi-selection — so nothing else regresses.
+		function onRowClick({ item, event }: { item: Item; event: MouseEvent }) {
+			const isPlainEditClick =
+				editInDrawer.value
+				&& !event.ctrlKey
+				&& !event.metaKey
+				&& props.readonly !== true
+				&& !props.selectMode
+				&& !(selection.value?.length > 0)
+				&& !!primaryKeyField.value;
+
+			if (isPlainEditClick) {
+				editPrimaryKey.value = item[primaryKeyField.value!.field];
+				editActive.value = true;
+			}
+			else {
+				onClickDefault({ item, event });
+			}
 		}
 
 		function useItemOptions() {
