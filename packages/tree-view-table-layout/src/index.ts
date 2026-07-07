@@ -168,6 +168,7 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 		const { isFiltered } = useFilteringTreeView({ filterUser, search });
 
 		const { saveEdits } = useSaveEdits();
+		const { duplicateSelected, duplicating, canDuplicate } = useDuplicate();
 
 		return {
 			tableHeaders,
@@ -182,6 +183,9 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			editInDrawer,
 			groupSortAvailable,
 			applyGroupSort,
+			duplicateSelected,
+			duplicating,
+			canDuplicate,
 			onSortChange,
 			onAlignChange,
 			tableRowHeight,
@@ -591,6 +595,100 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			function turnOffManualSortOnFilter(filterIsActive: boolean) {
 				if (filterIsActive)
 					onSortChange(null);
+			}
+		}
+
+		// Duplicate the selected row(s). Directus' built-in "Save as Copy" only lives in the full-page
+		// item editor, which the drawer hides — so this brings duplication to the list where users look
+		// for it (next to the batch delete). For a string primary key (e.g. parameters.name) it mints a
+		// unique "<name>Copy" so the copy can be saved immediately; for an auto/uuid key it lets the DB
+		// assign one. Relational/alias/system fields are skipped. A single duplicate opens in the drawer
+		// so you can rename + tweak in one go.
+		function useDuplicate() {
+			const api = useApi();
+			const duplicating = ref(false);
+			const canDuplicate = computed(
+				() => (selection.value?.length ?? 0) >= 1 && !!primaryKeyField.value,
+			);
+
+			// Fields we must NOT copy: relations/aliases (would duplicate children or send arrays) and
+			// system-managed audit fields (Directus fills these itself on create).
+			const SKIP_SPECIAL = ['o2m', 'm2m', 'o2a', 'm2a', 'alias', 'no-data', 'group', 'translations', 'file', 'files', 'user-created', 'user-updated', 'date-created', 'date-updated', 'version'];
+
+			return { duplicateSelected, duplicating, canDuplicate };
+
+			async function duplicateSelected() {
+				if (duplicating.value || !selection.value?.length || !primaryKeyField.value) return;
+				duplicating.value = true;
+				const endpoint = getEndpoint(collection.value!);
+				const pkField = primaryKeyField.value.field;
+				// A key we must generate a fresh value for is EITHER auto-increment OR a uuid special
+				// (Directus auto-fills uuids) — in both cases we omit it and let the server assign.
+				const serverAssignsPk = !!primaryKeyField.value.schema?.has_auto_increment
+					|| (primaryKeyField.value.meta?.special ?? []).includes('uuid');
+
+				const copyable = (fieldsInCollection.value ?? [])
+					.filter((f) => {
+						const s = f.meta?.special ?? [];
+						if (SKIP_SPECIAL.some((x) => s.includes(x))) return false;
+						if (f.field === pkField && serverAssignsPk) return false;
+						return true;
+					})
+					.map((f) => f.field);
+
+				try {
+					const pks = [...selection.value];
+					let lastNewPk: PrimaryKey | null = null;
+					for (const pk of pks) {
+						const item = (await api.get(
+							`${endpoint}/${encodeURIComponent(String(pk))}`,
+							{ params: { fields: copyable.length ? copyable.join(',') : '*' } },
+						)).data.data;
+
+						const copy: Record<string, any> = {};
+						for (const f of copyable) if (item[f] !== undefined && item[f] !== null) copy[f] = item[f];
+
+						if (!serverAssignsPk && typeof item[pkField] === 'string') {
+							copy[pkField] = await uniqueName(endpoint, pkField, String(item[pkField]));
+						}
+						else {
+							delete copy[pkField];
+						}
+
+						const created = (await api.post(endpoint, copy)).data.data;
+						lastNewPk = created?.[pkField] ?? null;
+					}
+
+					selection.value = [];
+					refresh();
+					// One row duplicated -> open the copy in the drawer to rename/tweak immediately.
+					if (pks.length === 1 && lastNewPk != null) {
+						editPrimaryKey.value = lastNewPk;
+						editActive.value = true;
+					}
+				}
+				catch (error: any) {
+					const { useNotificationsStore } = system.stores;
+					useNotificationsStore().add({ title: 'Duplicate failed', type: 'error', dialog: true, error });
+				}
+				finally {
+					duplicating.value = false;
+				}
+			}
+
+			// Speed -> SpeedCopy -> SpeedCopy2 -> ... first name the server doesn't already have.
+			async function uniqueName(endpoint: string, pkField: string, base: string) {
+				for (let n = 1; n < 500; n++) {
+					const candidate = n === 1 ? `${base}Copy` : `${base}Copy${n}`;
+					try {
+						await api.get(`${endpoint}/${encodeURIComponent(candidate)}`, { params: { fields: pkField } });
+						// 200 -> taken, keep going
+					}
+					catch {
+						return candidate; // 403/404 -> free
+					}
+				}
+				return `${base}Copy${pkField}`; // improbable fallback
 			}
 		}
 

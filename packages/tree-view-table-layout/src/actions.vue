@@ -5,10 +5,25 @@ defineProps<{
 	showingCount?: string;
 	groupSortAvailable?: boolean;
 	applyGroupSort?: () => void;
+	canDuplicate?: boolean;
+	duplicating?: boolean;
+	duplicateSelected?: () => void;
 }>();
 </script>
 
 <template>
+	<v-button
+		v-if="canDuplicate"
+		v-tooltip.bottom="'Duplicate the selected item(s) — makes a copy with a new name and opens it'"
+		class="duplicate-btn"
+		x-small
+		secondary
+		:loading="duplicating"
+		@click="duplicateSelected?.()"
+	>
+		<v-icon name="content_copy" small left />
+		Duplicate
+	</v-button>
 	<v-button
 		v-if="groupSortAvailable"
 		v-tooltip.bottom="'Group by hierarchy: sort by H1 → H2 → H3 → H4 → Order'"
