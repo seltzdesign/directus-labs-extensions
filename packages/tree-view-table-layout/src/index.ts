@@ -76,6 +76,24 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			sortField,
 		} = useCollection(collection);
 
+		// "Group by hierarchy" sort — the H1 -> H2 -> H3 -> H4 -> Order multi-key order that mirrors
+		// the codegen parser's natural order. It's the default sort in flat mode, and the Actions-bar
+		// "Group" button re-applies it after a single-column header click. Directus REPLACES the sort
+		// on each header click instead of stacking it like a spreadsheet, so a button is the only way
+		// back to the grouped view. Tree mode (proui) already groups by parent, so it's skipped there.
+		const GROUP_SORT_FIELDS = ['h1', 'h2', 'h3', 'h4', 'order'];
+		function groupSortForCollection(): string[] | null {
+			const grouped = GROUP_SORT_FIELDS.filter(
+				(f) => fieldsInCollection.value?.some((fc: any) => fc.field === f),
+			);
+			return !layoutOptions.value?.parent && grouped.length ? grouped : null;
+		}
+		const groupSortAvailable = computed(() => groupSortForCollection() !== null);
+		function applyGroupSort() {
+			const grouped = groupSortForCollection();
+			if (grouped) sort.value = grouped;
+		}
+
 		const { sort, limit, page, fields } = useItemOptions();
 
 		const { aliasedFields, aliasQuery, aliasedKeys } = useAliasFields(
@@ -162,6 +180,8 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			editActive,
 			editPrimaryKey,
 			editInDrawer,
+			groupSortAvailable,
+			applyGroupSort,
 			onSortChange,
 			onAlignChange,
 			tableRowHeight,
@@ -249,6 +269,10 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			const limit = syncRefProperty(layoutQuery, 'limit', -1);
 
 			const defaultSort = computed(() => {
+				// Prefer the grouped hierarchy sort (H1 -> H4 -> Order) in flat mode; fall back to the
+				// collection's sort field or primary key.
+				const grouped = groupSortForCollection();
+				if (grouped) return grouped;
 				const field = sortField.value ?? primaryKeyField.value?.field;
 				return field ? [field] : [];
 			});
