@@ -8,10 +8,25 @@ defineProps<{
 	canDuplicate?: boolean;
 	duplicating?: boolean;
 	duplicateSelected?: () => void;
+	canRename?: boolean;
+	renaming?: boolean;
+	renameSelected?: () => void;
 }>();
 </script>
 
 <template>
+	<v-button
+		v-if="canRename"
+		v-tooltip.bottom="'Rename the selected item — moves it and re-points anything that references it'"
+		class="rename-btn"
+		x-small
+		secondary
+		:loading="renaming"
+		@click="renameSelected?.()"
+	>
+		<v-icon name="edit" small left />
+		Rename
+	</v-button>
 	<v-button
 		v-if="canDuplicate"
 		v-tooltip.bottom="'Duplicate the selected item(s) — makes a copy with a new name and opens it'"

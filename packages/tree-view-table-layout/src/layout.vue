@@ -246,6 +246,40 @@ function stopSectionMemory() {
 watch(editActiveWritable, (open) => (open ? startSectionMemory() : stopSectionMemory()));
 onBeforeUnmount(stopSectionMemory);
 
+// Lock the primary-key field inside the drawer: its value IS the row's identity and Directus can't
+// rename it via an edit (a PATCH silently keeps the old key), so typing a new name here does nothing.
+// Mark it non-interactive (class + readonly) so it's obvious you must use the Rename action instead.
+// Existing rows only (data-primary-key !== '+') — the create form is untouched. The form re-renders
+// async, so — like the section restore — we re-apply for a short window.
+let pkLockRaf = 0;
+function lockPrimaryKeyField() {
+	const field = props.primaryKeyField?.field;
+	if (!field)
+		return;
+	const wrap = document.querySelector(`.v-drawer [data-field="${field}"]`) as HTMLElement | null;
+	if (!wrap || wrap.getAttribute('data-primary-key') === '+')
+		return;
+	wrap.classList.add('sm-pk-locked');
+	if (!wrap.title)
+		wrap.title = 'This is the ID — use the Rename button to change it (editing here won’t rename).';
+	for (const el of wrap.querySelectorAll('input, textarea'))
+		(el as HTMLInputElement).readOnly = true;
+}
+function startPkLock() {
+	let frames = 0;
+	const step = () => {
+		lockPrimaryKeyField();
+		if (frames++ < 180)
+			pkLockRaf = requestAnimationFrame(step);
+	};
+	pkLockRaf = requestAnimationFrame(step);
+}
+function stopPkLock() {
+	cancelAnimationFrame(pkLockRaf);
+}
+watch(editActiveWritable, (open) => (open ? startPkLock() : stopPkLock()));
+onBeforeUnmount(stopPkLock);
+
 const mainElement = inject<Ref<Element | undefined>>('main-element');
 
 const table = ref<ComponentPublicInstance>();
@@ -567,5 +601,24 @@ function removeField(fieldKey: string) {
 
 .flip {
 	transform: scaleY(-1);
+}
+</style>
+
+<!-- Non-scoped: the drawer-item is portalled outside this component, so scoped styles can't reach it.
+     Locks the primary-key field's inputs (see lockPrimaryKeyField) — non-interactive + dimmed, with a
+     small padlock, so it's obvious the identity can't be renamed here (use the Rename action). -->
+<style>
+.v-drawer .sm-pk-locked :is(input, textarea, .v-input, .input) {
+	pointer-events: none;
+}
+.v-drawer .sm-pk-locked {
+	opacity: 0.6;
+}
+.v-drawer .sm-pk-locked::after {
+	content: "🔒 use Rename to change";
+	display: block;
+	margin-top: 4px;
+	font-size: 12px;
+	color: var(--theme--foreground-subdued, #a2a2a2);
 }
 </style>

@@ -168,7 +168,7 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 		const { isFiltered } = useFilteringTreeView({ filterUser, search });
 
 		const { saveEdits } = useSaveEdits();
-		const { duplicateSelected, duplicating, canDuplicate } = useDuplicate();
+		const { duplicateSelected, duplicating, canDuplicate, renameSelected, renaming, canRename } = useRowOps();
 
 		return {
 			tableHeaders,
@@ -186,6 +186,9 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			duplicateSelected,
 			duplicating,
 			canDuplicate,
+			renameSelected,
+			renaming,
+			canRename,
 			onSortChange,
 			onAlignChange,
 			tableRowHeight,
@@ -604,18 +607,26 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 		// IS the identity and Directus can't rename it after creation, so we ask for the copy's name up
 		// front (default "<name>Copy"); for an auto/uuid key the DB assigns one. Relational/alias/system
 		// fields are skipped. A single duplicate opens in the drawer afterwards to tweak the other fields.
-		function useDuplicate() {
+		function useRowOps() {
 			const api = useApi();
 			const duplicating = ref(false);
+			const renaming = ref(false);
+			// True when the DB assigns the key (auto-increment or uuid) — such keys are never renamed.
+			const pkAutoAssigned = () => !!primaryKeyField.value?.schema?.has_auto_increment
+				|| (primaryKeyField.value?.meta?.special ?? []).includes('uuid');
 			const canDuplicate = computed(
 				() => (selection.value?.length ?? 0) >= 1 && !!primaryKeyField.value,
+			);
+			// Rename only makes sense for ONE row with a user-managed (non-server-assigned) string key.
+			const canRename = computed(
+				() => (selection.value?.length ?? 0) === 1 && !!primaryKeyField.value && !pkAutoAssigned(),
 			);
 
 			// Fields we must NOT copy: relations/aliases (would duplicate children or send arrays) and
 			// system-managed audit fields (Directus fills these itself on create).
 			const SKIP_SPECIAL = ['o2m', 'm2m', 'o2a', 'm2a', 'alias', 'no-data', 'group', 'translations', 'file', 'files', 'user-created', 'user-updated', 'date-created', 'date-updated', 'version'];
 
-			return { duplicateSelected, duplicating, canDuplicate };
+			return { duplicateSelected, duplicating, canDuplicate, renameSelected, renaming, canRename };
 
 			async function duplicateSelected() {
 				if (duplicating.value || !selection.value?.length || !primaryKeyField.value) return;
@@ -697,6 +708,70 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 				}
 				finally {
 					duplicating.value = false;
+				}
+			}
+
+			// Rename = create the row under the new key, re-point every FK that targets this collection
+			// (e.g. proui.parameter) from old -> new, then delete the old row. Directus silently ignores a
+			// primary-key change on PATCH, so a real move must recreate + repoint. Order matters (create ->
+			// repoint -> delete) so references are never orphaned. Opens the renamed row in the drawer.
+			async function renameSelected() {
+				if (renaming.value || !canRename.value || !primaryKeyField.value) return;
+				const endpoint = getEndpoint(collection.value!);
+				const pkField = primaryKeyField.value.field;
+				const oldName = String(selection.value![0]);
+				const input = typeof window !== 'undefined' ? window.prompt(`Rename "${oldName}" to:`, oldName) : null;
+				if (input == null) return;                    // cancelled
+				const newName = input.trim();
+				if (!newName || newName === oldName) return;   // empty / unchanged
+				if (await itemExists(endpoint, pkField, newName)) {
+					const { useNotificationsStore } = system.stores;
+					useNotificationsStore().add({ title: `"${newName}" already exists — pick another name.`, type: 'error' });
+					return;
+				}
+
+				renaming.value = true;
+				try {
+					// 1. create the row under the new key (must exist before we re-point FKs to it).
+					const item = (await api.get(`${endpoint}/${encodeURIComponent(oldName)}`, { params: { fields: '*' } })).data.data;
+					const copy: Record<string, any> = {};
+					for (const f of fieldsInCollection.value ?? []) {
+						const s = f.meta?.special ?? [];
+						if (f.field === pkField || SKIP_SPECIAL.some((x) => s.includes(x))) continue;
+						if (item[f.field] !== undefined && item[f.field] !== null) copy[f.field] = item[f.field];
+					}
+					copy[pkField] = newName;
+					await api.post(endpoint, copy);
+					// 2. re-point every relation that targets this collection's key: old -> new.
+					await repointReferences(oldName, newName);
+					// 3. drop the old row.
+					await api.delete(`${endpoint}/${encodeURIComponent(oldName)}`);
+
+					selection.value = [];
+					refresh();
+					editPrimaryKey.value = newName;
+					editActive.value = true;
+				}
+				catch (error: any) {
+					const { useNotificationsStore } = system.stores;
+					useNotificationsStore().add({ title: 'Rename failed', type: 'error', dialog: true, error });
+				}
+				finally {
+					renaming.value = false;
+				}
+			}
+
+			// Update every FK that points at THIS collection's key (e.g. proui.parameter -> parameters.name)
+			// from oldVal to newVal, one bulk update per relation. Runs BEFORE the old row is deleted so
+			// placements are never orphaned.
+			async function repointReferences(oldVal: string, newVal: string) {
+				const all = (await api.get('/relations')).data.data ?? [];
+				const rels = all.filter((r: any) => r.related_collection === collection.value && r.collection && r.field);
+				for (const r of rels) {
+					await api.patch(getEndpoint(r.collection), {
+						query: { filter: { [r.field]: { _eq: oldVal } } },
+						data: { [r.field]: newVal },
+					});
 				}
 			}
 
