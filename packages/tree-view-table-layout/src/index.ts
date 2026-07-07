@@ -600,10 +600,10 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 
 		// Duplicate the selected row(s). Directus' built-in "Save as Copy" only lives in the full-page
 		// item editor, which the drawer hides — so this brings duplication to the list where users look
-		// for it (next to the batch delete). For a string primary key (e.g. parameters.name) it mints a
-		// unique "<name>Copy" so the copy can be saved immediately; for an auto/uuid key it lets the DB
-		// assign one. Relational/alias/system fields are skipped. A single duplicate opens in the drawer
-		// so you can rename + tweak in one go.
+		// for it (next to the batch delete). For a user-managed string key (e.g. parameters.name) the key
+		// IS the identity and Directus can't rename it after creation, so we ask for the copy's name up
+		// front (default "<name>Copy"); for an auto/uuid key the DB assigns one. Relational/alias/system
+		// fields are skipped. A single duplicate opens in the drawer afterwards to tweak the other fields.
 		function useDuplicate() {
 			const api = useApi();
 			const duplicating = ref(false);
@@ -619,13 +619,36 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 
 			async function duplicateSelected() {
 				if (duplicating.value || !selection.value?.length || !primaryKeyField.value) return;
-				duplicating.value = true;
 				const endpoint = getEndpoint(collection.value!);
 				const pkField = primaryKeyField.value.field;
 				// A key we must generate a fresh value for is EITHER auto-increment OR a uuid special
 				// (Directus auto-fills uuids) — in both cases we omit it and let the server assign.
 				const serverAssignsPk = !!primaryKeyField.value.schema?.has_auto_increment
 					|| (primaryKeyField.value.meta?.special ?? []).includes('uuid');
+				const single = selection.value.length === 1;
+
+				// A user-managed string key (e.g. parameters.name) IS the row's identity, and Directus
+				// cannot rename it after creation (a PATCH silently keeps the old key). So for a single
+				// duplicate we ask for the copy's name UP FRONT rather than letting the user try to rename
+				// it in the drawer later (which fails silently). Cancel/empty = abort.
+				let chosenName: string | null = null;
+				if (!serverAssignsPk && single) {
+					const base = String(selection.value[0]);
+					const suggested = await uniqueName(endpoint, pkField, base);
+					const input = typeof window !== 'undefined'
+						? window.prompt(`Name for the copy of "${base}":`, suggested)
+						: suggested;
+					if (input == null) return;               // cancelled
+					chosenName = input.trim();
+					if (!chosenName) return;                  // empty
+					if (await itemExists(endpoint, pkField, chosenName)) {
+						const { useNotificationsStore } = system.stores;
+						useNotificationsStore().add({ title: `"${chosenName}" already exists — pick another name.`, type: 'error' });
+						return;
+					}
+				}
+
+				duplicating.value = true;
 
 				const copyable = (fieldsInCollection.value ?? [])
 					.filter((f) => {
@@ -648,8 +671,9 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 						const copy: Record<string, any> = {};
 						for (const f of copyable) if (item[f] !== undefined && item[f] !== null) copy[f] = item[f];
 
-						if (!serverAssignsPk && typeof item[pkField] === 'string') {
-							copy[pkField] = await uniqueName(endpoint, pkField, String(item[pkField]));
+						if (!serverAssignsPk) {
+							// single: the name chosen in the prompt; multi: auto "<name>Copy" per row.
+							copy[pkField] = chosenName ?? await uniqueName(endpoint, pkField, String(item[pkField]));
 						}
 						else {
 							delete copy[pkField];
@@ -689,6 +713,16 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 					}
 				}
 				return `${base}Copy${pkField}`; // improbable fallback
+			}
+
+			async function itemExists(endpoint: string, pkField: string, name: string) {
+				try {
+					await api.get(`${endpoint}/${encodeURIComponent(name)}`, { params: { fields: pkField } });
+					return true;   // 200 -> exists
+				}
+				catch {
+					return false;  // 403/404 -> free
+				}
 			}
 		}
 
