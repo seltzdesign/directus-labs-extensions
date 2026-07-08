@@ -449,7 +449,9 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			const tableSpacing = syncRefProperty(
 				layoutOptions,
 				'spacing',
-				'cozy',
+				// SpaceMusic default: compact — these tables carry a lot of rows, and compact
+				// is what we want everywhere (a preset with no stored spacing lands here).
+				'compact',
 			);
 
 			const tableRowHeight = computed<number>(() => {
